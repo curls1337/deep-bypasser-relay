@@ -259,6 +259,10 @@ app.post("/relay/3ds2", async (req, res) => {
     if (req.headers["x-original-referer"]) {
       forwardHeaders["Referer"] = req.headers["x-original-referer"];
     }
+    // Teruskan cookies asli dari browser agar session-bound Stripe valid
+    if (req.headers["x-original-cookies"]) {
+      forwardHeaders["Cookie"] = req.headers["x-original-cookies"];
+    }
 
     // Body bisa string atau buffer
     const bodyToSend =
