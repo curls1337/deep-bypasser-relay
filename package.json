@@ -1,0 +1,16 @@
+{
+  "name": "deep-bypasser-relay",
+  "version": "1.0.0",
+  "description": "Relay server untuk Deep Bypasser Chrome Extension",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "dev": "node worker.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
