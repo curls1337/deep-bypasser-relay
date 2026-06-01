@@ -136,6 +136,50 @@ app.post("/ext/pulse", (req, res) => {
 });
 
 // ============================================================================
+// ENDPOINT: POST /license/activate  (dan alias: /license/verify, /license/challenge, /license/prove, /license/revalidate)
+// Background.js memanggil endpoint ini untuk validasi/revalidasi license.
+// Karena kita sudah auto-bootstrap di client, kita cukup balas "valid: true"
+// sehingga session tidak pernah di-reset.
+// ============================================================================
+
+const licenseHandler = (req, res) => {
+  const body = req.body || {};
+  const key = String(body.key || body.licenseKey || "").trim();
+
+  // Generate session tokens acak
+  const randomToken = (prefix) => {
+    const bytes = require("crypto").randomBytes(24).toString("hex");
+    return prefix + bytes;
+  };
+
+  res.json({
+    ok: true,
+    valid: true,
+    status: "active",
+    plan: "premium",
+    expiresAt: null,
+    eligible: true,
+    reason: "eligible",
+    session: {
+      sessionId:    randomToken("sess_"),
+      accessToken:  randomToken("tok_"),
+      refreshToken: randomToken("ref_"),
+      expiresAt:    new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
+    },
+    proof: randomToken("proof_"),
+    challenge: randomToken("chall_"),
+    ts: Date.now(),
+  });
+};
+
+app.post("/license/activate",   licenseHandler);
+app.post("/license/verify",     licenseHandler);
+app.post("/license/challenge",  licenseHandler);
+app.post("/license/prove",      licenseHandler);
+app.post("/license/revalidate", licenseHandler);
+app.post("/license/validate",   licenseHandler);
+
+// ============================================================================
 // ENDPOINT: POST /risk/evaluate
 // Risk evaluation — extension kirim data session untuk dapat risk score.
 // Body: JSON { riskAuth: { licenseKey, sessionId, accessToken, ... }, ... }
