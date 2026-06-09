@@ -42,6 +42,18 @@ const CONFIG = {
 // MIDDLEWARE
 // ============================================================================
 
+// Raw body capture for 3DS relay — must run BEFORE global body parsers
+app.use("/relay/3ds2", (req, res, next) => {
+  if (req.method !== "POST") return next();
+  const chunks = [];
+  req.on("data", c => chunks.push(c));
+  req.on("end", () => {
+    req.rawBody = Buffer.concat(chunks).toString("utf8");
+    next();
+  });
+  req.on("error", next);
+});
+
 // Parse JSON body
 app.use(express.json({ limit: "2mb" }));
 // Parse binary body (untuk /ext/pulse yang mengirim AES-GCM terenkripsi)
@@ -296,8 +308,8 @@ app.post("/relay/3ds2", async (req, res) => {
   }
 
   // Parse raw body for urlencoded parameters
-  let rawBody = "";
-  if (req.body) {
+  let rawBody = req.rawBody || "";
+  if (!rawBody && req.body) {
     if (typeof req.body === "string") {
       rawBody = req.body;
     } else if (Buffer.isBuffer(req.body)) {
